@@ -195,8 +195,6 @@ pyvenv.cfg
 pip-selfcheck.json
 
 # folders to ignore
-sample/
-zipped_files/
 Transfer_Learning_DR/
 kaggle/
-kera1-5fold-run-01-v1-fold-02-run-02.check/
+zipped_files/
