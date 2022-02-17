@@ -1,3 +1,6 @@
+# command to run the training
+# python TransferLearning_reg.py --path 'kaggle/' --class_folders '["class0","class1","class2","class3","class4"]' --dim 224 --lr 1e-4 --batch_size 32 --epochs 5 --initial_layers_to_freeze 10 --model Resnet50 --folds 5 --outdir 'Transfer_Learning_DR/' 
+
 # data science libraries
 from unittest import result
 from xml.etree.ElementInclude import include
@@ -44,16 +47,14 @@ ssl._create_default_https_context = ssl._create_unverified_context
 print("all resources loaded")
 
 
-
-
-
-
-
+# global get_im_cv2 function
 def get_im_cv2(path,dim=224):
     img = cv2.imread(path)
     resized = cv2.resize(img, (dim,dim), cv2.INTER_LINEAR)
     return resized
 
+
+# global preprocess function
 # Pre Process the Images based on the ImageNet pre-trained model Image transformation
 def pre_process(img):
     img[:,:,0] = img[:,:,0] - 103.939
@@ -62,7 +63,8 @@ def pre_process(img):
     return img
 
 
-class DataGenerator(keras.utils.Sequence):
+# put all of our data in a DataGenerator for mini batches
+class DataGenerator(tf.keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(self,files,labels,batch_size=32,n_classes=5,dim=(224,224,3),shuffle=True):
         'Initialization'
@@ -113,17 +115,17 @@ class DataGenerator(keras.utils.Sequence):
             img = get_im_cv2(f,dim=self.dim[0])
             img = pre_process(img)
             label = labels[i]
-            #label = keras.utils.np_utils.to_categorical(label,self.n_classes)
             X[i,] = img
             y[i,] = label
        # print(X.shape,y.shape)
         return X,y
 
 
-
+# this is the actual transfer learning happening itself
 class TransferLearning:
 
 	def __init__(self):
+		# read in the same parameters as before
 		parser = argparse.ArgumentParser(description='Process the inputs')
 		parser.add_argument('--path',help='image directory')
 		parser.add_argument('--class_folders',help='class images folder names')
@@ -153,6 +155,7 @@ class TransferLearning:
 		self.outdir = args.outdir
 
 
+	# inpit reading function (local, but same)
 	def get_im_cv2(self,path,dim=224):
 		img = cv2.imread(path)
 		resized = cv2.resize(img, (dim,dim), cv2.INTER_LINEAR)
@@ -203,7 +206,7 @@ class TransferLearning:
 		x = Dense(512, activation='relu')(x)
 		x = Dropout(0.5)(x)
 		out = Dense(1)(x)
-		model_final = Model(input = model.input,outputs=out)
+		model_final = Model(model.input, out)
 		if full_freeze != 'N':
 			for layer in model.layers[0:freeze_layers]:
 				layer.trainable = False
@@ -233,8 +236,6 @@ class TransferLearning:
 		kf = KFold(n_splits=n_fold, random_state=0, shuffle=True)
 
 		for train_index,test_index in kf.split(file_list):
-
-
 			k += 1
 			file_list = np.array(file_list)
 			labels   = np.array(labels)
@@ -252,7 +253,7 @@ class TransferLearning:
 
 			adam = optimizers.Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
 			model_final.compile(optimizer=adam, loss=["mse"],metrics=['mse'])
-			reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.50,patience=3, min_lr=0.000001)
+			reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.50,patience=3, min_lr=0.000001)
 			early = EarlyStopping(monitor='val_loss', patience=10, mode='min', verbose=1)
 			logger = CSVLogger('keras-5fold-run-01-v1-epochs_ib.log', separator=',', append=False)
 			checkpoint = ModelCheckpoint(
@@ -269,7 +270,7 @@ class TransferLearning:
 			f = h5py.File(model_name, 'r+')
 			del f['optimizer_weights']
 			f.close()
-			model_final = keras.models.load_model(model_name)
+			model_final = tf.keras.models.load_model(model_name)
 			model_name1 = self.outdir + str(model) + '___' + str(k)
 			model_final.save(model_name1)
 			model_save_dest[k] = model_name1
@@ -277,13 +278,12 @@ class TransferLearning:
 		return model_save_dest
 
 	# Hold out dataset validation function
-
 	def inference_validation(self,test_X,test_y,model_save_dest,n_class=5,folds=5):
 		print(test_X.shape,test_y.shape)
 		pred = np.zeros(test_X.shape[0])
 		for k in range(1,folds + 1):
-			print(f'running inference on fold: {k}')
-			model = keras.models.load_model(model_save_dest[k])
+			print('running inference on fold:', k)
+			model = tf.keras.models.load_model(model_save_dest[k])
 			pred = pred + model.predict(test_X)[:,0]
 			pred = pred
 			print(pred.shape)
@@ -307,13 +307,13 @@ class TransferLearning:
 			print(len(file_list),len(labels))
 			print(labels[0],labels[-1])
 			self.model_save_dest = self.train_model(file_list,labels,n_fold=self.folds,batch_size=self.batch_size,
-                                                        epochs=self.epochs,dim=self.dim,lr=self.lr,model=self.model)
-			joblib.dump(self.model_save_dest,f'{self.outdir}/model_dict.pkl')
+														epochs=self.epochs,dim=self.dim,lr=self.lr,model=self.model)
+			joblib.dump(self.model_save_dest, str(self.outdir) + '/model_dict.pkl')
 			print("Model saved to dest:",self.model_save_dest)
 		else:
 			model_save_dest = joblib.load(self.model_save_dest)
 			print('Models loaded from:',model_save_dest)
-            # Do inference/validation
+			# Do inference/validation
 			test_files,test_y = self.read_data(self.class_folders,self.path,self.num_class,self.dim,train_val='validation')
 			test_X = []
 			for f in test_files:
@@ -329,7 +329,7 @@ class TransferLearning:
 			results_df['file_name'] = test_files
 			results_df['target'] = test_y
 			results_df['prediction'] = pred_class
-			results_df.to_csv(f'{self.outdir}/val_resuts_reg.csv',index=False)
+			results_df.to_csv(str(self.outdir) + '/val_resuts_reg.csv',index=False)
 
 			print("-----------------------------------------------------")
 			print("Kappa score:", kappa)
