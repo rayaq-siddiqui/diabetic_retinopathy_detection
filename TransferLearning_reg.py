@@ -1,5 +1,6 @@
 # command to run the training
 # python TransferLearning_reg.py --path 'kaggle/' --class_folders '["class0","class1","class2","class3","class4"]' --dim 224 --lr 1e-4 --batch_size 32 --epochs 5 --initial_layers_to_freeze 10 --model Resnet50 --folds 5 --outdir 'Transfer_Learning_DR/' 
+# python TransferLearning_reg.py --path 'kaggle/' --class_folders '["class0","class1","class2","class3","class4"]' --dim 224 --lr 1e-1 --batch_size 32 --epochs 5 --initial_layers_to_freeze 10 --model VGG16 --folds 5 --outdir 'Transfer_Learning_DR/'
 
 # data science libraries
 from unittest import result
@@ -17,7 +18,7 @@ from sklearn.metrics import log_loss
 # keras and tf
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import Dense, Dropout, Flatten, GlobalMaxPooling2D, GlobalAveragePooling2D, Convolution2D, MaxPooling2D, ZeroPadding2D
+from tensorflow.keras.layers import Dense, Dropout, Flatten, GlobalMaxPooling2D, GlobalAveragePooling2D, Conv2D, MaxPool2D, ZeroPadding2D
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, Callback
 from tensorflow.keras.utils import to_categorical
@@ -61,6 +62,43 @@ def pre_process(img):
     img[:,:,1] = img[:,:,0] - 116.779
     img[:,:,2] = img[:,:,0] - 123.68
     return img
+
+
+# custom RayaqModel
+class RayaqModel(tf.keras.Model):
+	def __init__(self, out=5):
+		super().__init__()
+		self.conv1 = Conv2D(32, kernel_size=2, activation='relu')
+		self.maxpool1 = MaxPool2D()
+		self.dropout1 = Dropout(0.1)
+		self.conv2 = Conv2D(64, kernel_size=2, activation='relu')
+		self.maxpool2 = MaxPool2D()
+		self.dropout2 = Dropout(0.1)
+		self.conv3 = Conv2D(128, kernel_size=2, activation='relu')
+		self.maxpool3 = MaxPool2D()
+		self.dropout3 = Dropout(0.1)
+
+		# for the dnn
+		self.flatten = Flatten()
+		self.dense1 = Dense(512, activation='relu')
+		self.dense2 = Dense(128, activation='relu')
+		self.dense3 = Dense(out, activation='softmax')
+
+	def call(self, x):
+		x = self.conv1(x)
+		x = self.maxpool1(x)
+		x = self.dropout1(x)
+		x = self.conv2(x)
+		x = self.maxpool2(x)
+		x = self.dropout2(x)
+		x = self.conv3(x)
+		x = self.maxpool3(x)
+		x = self.dropout3(x)
+		x = self.flatten(x)
+		x = self.dense1(x)
+		x = self.dense2(x)
+		x = self.dense3(x)
+		return x
 
 
 # put all of our data in a DataGenerator for mini batches
@@ -189,8 +227,8 @@ class TransferLearning:
 		x = Dropout(0.5)(x)
 		x = Dense(512, activation='relu')(x)
 		x = Dropout(0.5)(x)
-		out = Dense(1)(x)
-		model_final = Model(input = model.input,outputs=out)
+		out = Dense(5)(x)
+		model_final = Model(model.input,out)
 		if full_freeze != 'N':
 			for layer in model.layers[0:freeze_layers]:
 				layer.trainable = False
@@ -205,7 +243,7 @@ class TransferLearning:
 		x = Dropout(0.5)(x)
 		x = Dense(512, activation='relu')(x)
 		x = Dropout(0.5)(x)
-		out = Dense(1)(x)
+		out = Dense(5)(x)
 		model_final = Model(model.input, out)
 		if full_freeze != 'N':
 			for layer in model.layers[0:freeze_layers]:
@@ -213,7 +251,6 @@ class TransferLearning:
 		return model_final
 
 	# VGG16 Model for transfer Learning 
-
 	def VGG16_pseudo(self,dim=224,freeze_layers=10,full_freeze='N'):
 		model = VGG16(weights='imagenet',include_top=False)
 		x = model.output
@@ -222,12 +259,18 @@ class TransferLearning:
 		x = Dropout(0.5)(x)
 		x = Dense(512, activation='relu')(x)
 		x = Dropout(0.5)(x)
-		out = Dense(1)(x)
-		model_final = Model(input = model.input,outputs=out)
+		out = Dense(5)(x)
+		model_final = Model(model.input,out)
 		if full_freeze != 'N':
 			for layer in model.layers[0:freeze_layers]:
 				layer.trainable = False
 		return model_final
+
+
+	# rayaq custom model
+	def rayaq_pseudo(self,dim=224,freeze_layers=10,full_freeze='N'):
+		model = RayaqModel(5)
+		return model
 
 
 	def train_model(self,file_list,labels,n_fold=5,batch_size=16,epochs=40,dim=224,lr=1e-5,model='ResNet50'):
@@ -251,9 +294,16 @@ class TransferLearning:
 			if model == 'InceptionV3':
 				model_final = self.inception_pseudo(dim=224,freeze_layers=10,full_freeze='N')
 
-			adam = optimizers.Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-			model_final.compile(optimizer=adam, loss=["mse"],metrics=['mse'])
-			reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.50,patience=3, min_lr=0.000001)
+			if model == 'Rayaq':
+				model_final = self.rayaq_pseudo(dim=224,freeze_layers=10,full_freeze='N')
+
+			adam = optimizers.Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1, decay=0.0)
+			model_final.compile(
+				optimizer=adam, 
+				loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+				metrics=[tf.keras.metrics.SparseCategoricalAccuracy()]
+			)
+			# reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.50,patience=3, min_lr=0.000001)
 			early = EarlyStopping(monitor='val_loss', patience=10, mode='min', verbose=1)
 			logger = CSVLogger('keras-5fold-run-01-v1-epochs_ib.log', separator=',', append=False)
 			checkpoint = ModelCheckpoint(
@@ -261,7 +311,8 @@ class TransferLearning:
 								monitor='val_loss', mode='min',
 								save_best_only=True,
 								verbose=1) 
-			callbacks = [reduce_lr,early,checkpoint,logger]
+			# callbacks = [reduce_lr,early,checkpoint,logger]
+			callbacks = [early,checkpoint,logger]
 			train_gen = DataGenerator(train_files,train_labels,batch_size=32,n_classes=len(self.class_folders),dim=(self.dim,self.dim,3),shuffle=True)
 			val_gen = DataGenerator(val_files,val_labels,batch_size=32,n_classes=len(self.class_folders),dim=(self.dim,self.dim,3),shuffle=True)
 			model_final.fit_generator(train_gen,epochs=epochs,verbose=1,validation_data=(val_gen),callbacks=callbacks)
